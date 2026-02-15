@@ -19,6 +19,14 @@ var (
 	version   = "dev"
 	commit    = "unknown"
 	buildDate = "unknown"
+	defaultRoles = []uint32{
+		uint32(wca.EConsole),
+		uint32(wca.EMultimedia),
+		uint32(wca.ECommunications),
+	}
+	communicationRoles = []uint32{
+		uint32(wca.ECommunications),
+	}
 )
 
 type deviceInfo struct {
@@ -59,6 +67,16 @@ func main() {
 	switchInputID := switchInputCmd.String("id", "", "device ID")
 	switchInputName := switchInputCmd.String("name", "", "device name")
 	switchInputJSON := switchInputCmd.Bool("json", true, "output JSON")
+
+	switchOutputComCmd := flag.NewFlagSet("switch-output-communication", flag.ExitOnError)
+	switchOutputComID := switchOutputComCmd.String("id", "", "device ID")
+	switchOutputComName := switchOutputComCmd.String("name", "", "device name")
+	switchOutputComJSON := switchOutputComCmd.Bool("json", true, "output JSON")
+
+	switchInputComCmd := flag.NewFlagSet("switch-input-communication", flag.ExitOnError)
+	switchInputComID := switchInputComCmd.String("id", "", "device ID")
+	switchInputComName := switchInputComCmd.String("name", "", "device name")
+	switchInputComJSON := switchInputComCmd.Bool("json", true, "output JSON")
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -122,6 +140,42 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "switch-output-communication":
+		if err := switchOutputComCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if !*switchOutputComJSON {
+			fmt.Fprintln(os.Stderr, "only --json output is supported")
+			os.Exit(2)
+		}
+		device, err := switchDeviceWithRoles(wca.ERender, *switchOutputComID, *switchOutputComName, communicationRoles)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := outputSwitchResult("output-communication", device); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case "switch-input-communication":
+		if err := switchInputComCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if !*switchInputComJSON {
+			fmt.Fprintln(os.Stderr, "only --json output is supported")
+			os.Exit(2)
+		}
+		device, err := switchDeviceWithRoles(wca.ECapture, *switchInputComID, *switchInputComName, communicationRoles)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := outputSwitchResult("input-communication", device); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "version":
 		if err := outputVersion(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -141,6 +195,10 @@ func printUsage() {
 		"  win-audio-cli switch-output --name <device-name>",
 		"  win-audio-cli switch-input --id <device-id>",
 		"  win-audio-cli switch-input --name <device-name>",
+		"  win-audio-cli switch-output-communication --id <device-id>",
+		"  win-audio-cli switch-output-communication --name <device-name>",
+		"  win-audio-cli switch-input-communication --id <device-id>",
+		"  win-audio-cli switch-input-communication --name <device-name>",
 		"  win-audio-cli version",
 	}, "\n")
 	fmt.Fprintln(os.Stderr, message)
@@ -308,6 +366,10 @@ func outputVersion() error {
 }
 
 func switchDevice(dataFlow wca.EDataFlow, id string, name string) (deviceInfo, error) {
+	return switchDeviceWithRoles(dataFlow, id, name, defaultRoles)
+}
+
+func switchDeviceWithRoles(dataFlow wca.EDataFlow, id string, name string, roles []uint32) (deviceInfo, error) {
 	if id == "" && name == "" {
 		return deviceInfo{}, fmt.Errorf("provide --id or --name")
 	}
@@ -322,7 +384,7 @@ func switchDevice(dataFlow wca.EDataFlow, id string, name string) (deviceInfo, e
 		return deviceInfo{}, err
 	}
 
-	if err := setDefaultDevice(device.ID); err != nil {
+	if err := setDefaultDeviceForRoles(device.ID, roles); err != nil {
 		return deviceInfo{}, err
 	}
 
@@ -366,16 +428,14 @@ func findDevice(report *deviceReport, dataFlow wca.EDataFlow, id string, name st
 }
 
 func setDefaultDevice(deviceID string) error {
+	return setDefaultDeviceForRoles(deviceID, defaultRoles)
+}
+
+func setDefaultDeviceForRoles(deviceID string, roles []uint32) error {
 	if err := ole.CoInitialize(0); err != nil {
 		return err
 	}
 	defer ole.CoUninitialize()
-
-	roles := []uint32{
-		uint32(wca.EConsole),
-		uint32(wca.EMultimedia),
-		uint32(wca.ECommunications),
-	}
 
 	configs := []struct {
 		name  string
@@ -560,7 +620,7 @@ func (p *policyConfigVista) Release() {
 	}
 }
 
-func setDefaultEndpoints(config *policyConfig, deviceID string, roles []uint32) error {
+func setDefaultEndpoints(config policyConfig, deviceID string, roles []uint32) error {
 	for _, role := range roles {
 		if err := config.SetDefaultEndpoint(deviceID, role); err != nil {
 			return fmt.Errorf("set default endpoint role %d: %w", role, err)

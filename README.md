@@ -35,6 +35,20 @@ Switch the default input device (all roles):
 ./win-audio-cli.exe switch-input --name "Microphone (USB Audio Device)"
 ```
 
+Set the communication output device (communications role only):
+
+```powershell
+./win-audio-cli.exe switch-output-communication --id "{device-id}"
+./win-audio-cli.exe switch-output-communication --name "Headset (Bluetooth Hands-Free)"
+```
+
+Set the communication input device (communications role only):
+
+```powershell
+./win-audio-cli.exe switch-input-communication --id "{device-id}"
+./win-audio-cli.exe switch-input-communication --name "Headset Microphone (Bluetooth Hands-Free)"
+```
+
 If device names are not unique, use `--id`.
 
 ## Output Shape
