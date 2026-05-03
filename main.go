@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -205,6 +206,9 @@ func printUsage() {
 }
 
 func enumerateDevices() (*deviceReport, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if err := ole.CoInitialize(0); err != nil {
 		return nil, err
 	}
@@ -432,6 +436,9 @@ func setDefaultDevice(deviceID string) error {
 }
 
 func setDefaultDeviceForRoles(deviceID string, roles []uint32) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if err := ole.CoInitialize(0); err != nil {
 		return err
 	}
