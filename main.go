@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -256,6 +257,9 @@ func printUsage() {
 }
 
 func enumerateDevices() (*deviceReport, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if err := ole.CoInitialize(0); err != nil {
 		return nil, err
 	}
@@ -496,6 +500,9 @@ func setDeviceVolume(dataFlow wca.EDataFlow, deviceType string, id string, name 
 		return volumeReport{}, err
 	}
 
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if err := ole.CoInitialize(0); err != nil {
 		return volumeReport{}, err
 	}
@@ -628,6 +635,9 @@ func setDefaultDevice(deviceID string) error {
 }
 
 func setDefaultDeviceForRoles(deviceID string, roles []uint32) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if err := ole.CoInitialize(0); err != nil {
 		return err
 	}
