@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -16,9 +17,9 @@ import (
 )
 
 var (
-	version   = "dev"
-	commit    = "unknown"
-	buildDate = "unknown"
+	version      = "dev"
+	commit       = "unknown"
+	buildDate    = "unknown"
 	defaultRoles = []uint32{
 		uint32(wca.EConsole),
 		uint32(wca.EMultimedia),
@@ -77,6 +78,18 @@ func main() {
 	switchInputComID := switchInputComCmd.String("id", "", "device ID")
 	switchInputComName := switchInputComCmd.String("name", "", "device name")
 	switchInputComJSON := switchInputComCmd.Bool("json", true, "output JSON")
+
+	setOutputVolumeCmd := flag.NewFlagSet("set-output-volume", flag.ExitOnError)
+	setOutputVolumeID := setOutputVolumeCmd.String("id", "", "device ID")
+	setOutputVolumeName := setOutputVolumeCmd.String("name", "", "device name")
+	setOutputVolumeValue := setOutputVolumeCmd.String("volume", "", "volume percentage (0-100)")
+	setOutputVolumeJSON := setOutputVolumeCmd.Bool("json", true, "output JSON")
+
+	setInputVolumeCmd := flag.NewFlagSet("set-input-volume", flag.ExitOnError)
+	setInputVolumeID := setInputVolumeCmd.String("id", "", "device ID")
+	setInputVolumeName := setInputVolumeCmd.String("name", "", "device name")
+	setInputVolumeValue := setInputVolumeCmd.String("volume", "", "volume percentage (0-100)")
+	setInputVolumeJSON := setInputVolumeCmd.Bool("json", true, "output JSON")
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -176,6 +189,42 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "set-output-volume":
+		if err := setOutputVolumeCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if !*setOutputVolumeJSON {
+			fmt.Fprintln(os.Stderr, "only --json output is supported")
+			os.Exit(2)
+		}
+		result, err := setDeviceVolume(wca.ERender, "output", *setOutputVolumeID, *setOutputVolumeName, *setOutputVolumeValue)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := outputVolumeResult(result); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case "set-input-volume":
+		if err := setInputVolumeCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if !*setInputVolumeJSON {
+			fmt.Fprintln(os.Stderr, "only --json output is supported")
+			os.Exit(2)
+		}
+		result, err := setDeviceVolume(wca.ECapture, "input", *setInputVolumeID, *setInputVolumeName, *setInputVolumeValue)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := outputVolumeResult(result); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "version":
 		if err := outputVersion(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -199,6 +248,8 @@ func printUsage() {
 		"  win-audio-cli switch-output-communication --name <device-name>",
 		"  win-audio-cli switch-input-communication --id <device-id>",
 		"  win-audio-cli switch-input-communication --name <device-name>",
+		"  win-audio-cli set-output-volume --volume <0-100> [--id <device-id>|--name <device-name>]",
+		"  win-audio-cli set-input-volume --volume <0-100> [--id <device-id>|--name <device-name>]",
 		"  win-audio-cli version",
 	}, "\n")
 	fmt.Fprintln(os.Stderr, message)
@@ -347,6 +398,12 @@ type switchReport struct {
 	Device deviceInfo `json:"device"`
 }
 
+type volumeReport struct {
+	Type   string     `json:"type"`
+	Volume float32    `json:"volume"`
+	Device deviceInfo `json:"device"`
+}
+
 type versionReport struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit"`
@@ -357,6 +414,12 @@ func outputSwitchResult(deviceType string, device deviceInfo) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(switchReport{Type: deviceType, Device: device})
+}
+
+func outputVolumeResult(report volumeReport) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
 }
 
 func outputVersion() error {
@@ -425,6 +488,139 @@ func findDevice(report *deviceReport, dataFlow wca.EDataFlow, id string, name st
 	}
 
 	return deviceInfo{}, fmt.Errorf("provide --id or --name")
+}
+
+func setDeviceVolume(dataFlow wca.EDataFlow, deviceType string, id string, name string, volumeValue string) (volumeReport, error) {
+	volume, err := parseVolume(volumeValue)
+	if err != nil {
+		return volumeReport{}, err
+	}
+
+	if err := ole.CoInitialize(0); err != nil {
+		return volumeReport{}, err
+	}
+	defer ole.CoUninitialize()
+
+	var enumerator *wca.IMMDeviceEnumerator
+	if err := wca.CoCreateInstance(
+		wca.CLSID_MMDeviceEnumerator,
+		0,
+		wca.CLSCTX_ALL,
+		wca.IID_IMMDeviceEnumerator,
+		&enumerator,
+	); err != nil {
+		return volumeReport{}, err
+	}
+	defer enumerator.Release()
+
+	device, info, err := targetDevice(enumerator, dataFlow, id, name)
+	if err != nil {
+		return volumeReport{}, err
+	}
+	defer device.Release()
+
+	var endpointVolume *wca.IAudioEndpointVolume
+	if err := device.Activate(wca.IID_IAudioEndpointVolume, wca.CLSCTX_ALL, nil, &endpointVolume); err != nil {
+		return volumeReport{}, err
+	}
+	defer endpointVolume.Release()
+
+	if err := endpointVolume.SetMasterVolumeLevelScalar(volume/100, nil); err != nil {
+		return volumeReport{}, err
+	}
+
+	var actualVolume float32
+	if err := endpointVolume.GetMasterVolumeLevelScalar(&actualVolume); err != nil {
+		return volumeReport{}, err
+	}
+
+	return volumeReport{Type: deviceType, Volume: actualVolume * 100, Device: info}, nil
+}
+
+func parseVolume(value string) (float32, error) {
+	if value == "" {
+		return 0, fmt.Errorf("provide --volume")
+	}
+
+	volume, err := strconv.ParseFloat(value, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --volume")
+	}
+	if volume < 0 || volume > 100 {
+		return 0, fmt.Errorf("--volume must be between 0 and 100")
+	}
+
+	return float32(volume), nil
+}
+
+func targetDevice(enumerator *wca.IMMDeviceEnumerator, dataFlow wca.EDataFlow, id string, name string) (*wca.IMMDevice, deviceInfo, error) {
+	defaultID, defaultComID, err := defaultDeviceIDs(enumerator, dataFlow)
+	if err != nil {
+		return nil, deviceInfo{}, err
+	}
+
+	if id == "" && name == "" {
+		var device *wca.IMMDevice
+		if err := enumerator.GetDefaultAudioEndpoint(uint32(dataFlow), uint32(wca.EConsole), &device); err != nil {
+			return nil, deviceInfo{}, err
+		}
+		info, err := deviceDetails(device, defaultID, defaultComID)
+		if err != nil {
+			device.Release()
+			return nil, deviceInfo{}, err
+		}
+		return device, info, nil
+	}
+
+	var collection *wca.IMMDeviceCollection
+	if err := enumerator.EnumAudioEndpoints(uint32(dataFlow), wca.DEVICE_STATE_ACTIVE, &collection); err != nil {
+		return nil, deviceInfo{}, err
+	}
+	defer collection.Release()
+
+	var count uint32
+	if err := collection.GetCount(&count); err != nil {
+		return nil, deviceInfo{}, err
+	}
+
+	var matchedDevice *wca.IMMDevice
+	var matchedInfo deviceInfo
+	for i := uint32(0); i < count; i++ {
+		var device *wca.IMMDevice
+		if err := collection.Item(i, &device); err != nil {
+			return nil, deviceInfo{}, err
+		}
+
+		info, err := deviceDetails(device, defaultID, defaultComID)
+		if err != nil {
+			device.Release()
+			return nil, deviceInfo{}, err
+		}
+
+		if id != "" && info.ID == id {
+			return device, info, nil
+		}
+		if id == "" && name != "" && strings.EqualFold(info.Name, name) {
+			if matchedDevice != nil {
+				matchedDevice.Release()
+				device.Release()
+				return nil, deviceInfo{}, fmt.Errorf("device name matches multiple devices")
+			}
+			matchedDevice = device
+			matchedInfo = info
+			continue
+		}
+
+		device.Release()
+	}
+
+	if matchedDevice != nil {
+		return matchedDevice, matchedInfo, nil
+	}
+	if id != "" {
+		return nil, deviceInfo{}, fmt.Errorf("device ID not found")
+	}
+	return nil, deviceInfo{}, fmt.Errorf("device name not found")
 }
 
 func setDefaultDevice(deviceID string) error {
