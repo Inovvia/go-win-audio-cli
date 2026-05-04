@@ -92,6 +92,16 @@ func main() {
 	setInputVolumeValue := setInputVolumeCmd.String("volume", "", "volume percentage (0-100)")
 	setInputVolumeJSON := setInputVolumeCmd.Bool("json", true, "output JSON")
 
+	getOutputVolumeCmd := flag.NewFlagSet("get-output-volume", flag.ExitOnError)
+	getOutputVolumeID := getOutputVolumeCmd.String("id", "", "device ID")
+	getOutputVolumeName := getOutputVolumeCmd.String("name", "", "device name")
+	getOutputVolumeJSON := getOutputVolumeCmd.Bool("json", true, "output JSON")
+
+	getInputVolumeCmd := flag.NewFlagSet("get-input-volume", flag.ExitOnError)
+	getInputVolumeID := getInputVolumeCmd.String("id", "", "device ID")
+	getInputVolumeName := getInputVolumeCmd.String("name", "", "device name")
+	getInputVolumeJSON := getInputVolumeCmd.Bool("json", true, "output JSON")
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(2)
@@ -226,6 +236,42 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "get-output-volume":
+		if err := getOutputVolumeCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if !*getOutputVolumeJSON {
+			fmt.Fprintln(os.Stderr, "only --json output is supported")
+			os.Exit(2)
+		}
+		result, err := getDeviceVolume(wca.ERender, "output", *getOutputVolumeID, *getOutputVolumeName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := outputVolumeResult(result); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case "get-input-volume":
+		if err := getInputVolumeCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if !*getInputVolumeJSON {
+			fmt.Fprintln(os.Stderr, "only --json output is supported")
+			os.Exit(2)
+		}
+		result, err := getDeviceVolume(wca.ECapture, "input", *getInputVolumeID, *getInputVolumeName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := outputVolumeResult(result); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "version":
 		if err := outputVersion(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -251,6 +297,8 @@ func printUsage() {
 		"  win-audio-cli switch-input-communication --name <device-name>",
 		"  win-audio-cli set-output-volume --volume <0-100> [--id <device-id>|--name <device-name>]",
 		"  win-audio-cli set-input-volume --volume <0-100> [--id <device-id>|--name <device-name>]",
+		"  win-audio-cli get-output-volume [--id <device-id>|--name <device-name>]",
+		"  win-audio-cli get-input-volume [--id <device-id>|--name <device-name>]",
 		"  win-audio-cli version",
 	}, "\n")
 	fmt.Fprintln(os.Stderr, message)
@@ -535,6 +583,47 @@ func setDeviceVolume(dataFlow wca.EDataFlow, deviceType string, id string, name 
 	if err := endpointVolume.SetMasterVolumeLevelScalar(volume/100, nil); err != nil {
 		return volumeReport{}, err
 	}
+
+	var actualVolume float32
+	if err := endpointVolume.GetMasterVolumeLevelScalar(&actualVolume); err != nil {
+		return volumeReport{}, err
+	}
+
+	return volumeReport{Type: deviceType, Volume: actualVolume * 100, Device: info}, nil
+}
+
+func getDeviceVolume(dataFlow wca.EDataFlow, deviceType string, id string, name string) (volumeReport, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	if err := ole.CoInitialize(0); err != nil {
+		return volumeReport{}, err
+	}
+	defer ole.CoUninitialize()
+
+	var enumerator *wca.IMMDeviceEnumerator
+	if err := wca.CoCreateInstance(
+		wca.CLSID_MMDeviceEnumerator,
+		0,
+		wca.CLSCTX_ALL,
+		wca.IID_IMMDeviceEnumerator,
+		&enumerator,
+	); err != nil {
+		return volumeReport{}, err
+	}
+	defer enumerator.Release()
+
+	device, info, err := targetDevice(enumerator, dataFlow, id, name)
+	if err != nil {
+		return volumeReport{}, err
+	}
+	defer device.Release()
+
+	var endpointVolume *wca.IAudioEndpointVolume
+	if err := device.Activate(wca.IID_IAudioEndpointVolume, wca.CLSCTX_ALL, nil, &endpointVolume); err != nil {
+		return volumeReport{}, err
+	}
+	defer endpointVolume.Release()
 
 	var actualVolume float32
 	if err := endpointVolume.GetMasterVolumeLevelScalar(&actualVolume); err != nil {

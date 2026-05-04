@@ -51,6 +51,18 @@ Set the communication input device (communications role only):
 
 If device names are not unique, use `--id`.
 
+Get output volume for the default output device:
+
+```powershell
+./win-audio-cli.exe get-output-volume
+```
+
+Get input volume for the default input device:
+
+```powershell
+./win-audio-cli.exe get-input-volume
+```
+
 Set output volume for the default output device:
 
 ```powershell
@@ -66,6 +78,8 @@ Set input volume for the default input device:
 You can target a specific input/output device with `--id` or `--name`:
 
 ```powershell
+./win-audio-cli.exe get-output-volume --id "{device-id}"
+./win-audio-cli.exe get-input-volume --name "Microphone (USB Audio Device)"
 ./win-audio-cli.exe set-output-volume --volume 35 --id "{device-id}"
 ./win-audio-cli.exe set-input-volume --volume 80 --name "Microphone (USB Audio Device)"
 ```
@@ -111,7 +125,7 @@ Volume values are percentages from `0` to `100`.
 }
 ```
 
-`set-output-volume` / `set-input-volume` returns:
+`get-output-volume` / `get-input-volume` / `set-output-volume` / `set-input-volume` returns:
 
 ```json
 {
